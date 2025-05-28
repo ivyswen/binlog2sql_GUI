@@ -1,6 +1,31 @@
-# Binlog2SQL GUI
+# Binlog2SQL GUI - MySQL 5.7版本
+
+> ⚠️ **重要提示**: 此版本专为MySQL 5.7设计，不支持MySQL 8.0
+>
+> 如需MySQL 8.0支持，请切换到 `mysql-8.0` 分支:
+> ```bash
+> git checkout mysql-8.0
+> ```
 
 基于PySide6开发的MySQL Binlog解析工具，提供图形化界面来解析MySQL binlog文件并生成对应的SQL语句。
+
+## 版本选择指南
+
+| 您的MySQL版本 | 推荐分支 | 命令 |
+|---------------|----------|------|
+| 5.5, 5.6, 5.7 | main | `git checkout main` |
+| 8.0+ | mysql-8.0 | `git checkout mysql-8.0` |
+
+### 自动检测MySQL版本
+```bash
+python detect_mysql_version.py
+```
+
+## 支持的MySQL版本
+- ✅ MySQL 5.5
+- ✅ MySQL 5.6
+- ✅ MySQL 5.7
+- ❌ MySQL 8.0 (请使用mysql-8.0分支)
 
 ## 功能特性
 
@@ -38,10 +63,10 @@
 ## 安装要求
 
 - Python 3.11+
-- PySide6
-- PyMySQL
-- mysql-replication
-- loguru
+- PySide6 >=6.9.0
+- PyMySQL >=1.1.1
+- mysql-replication ==0.45.1 (MySQL 5.7兼容版本)
+- loguru >=0.7.3
 
 ## 安装步骤
 
@@ -58,7 +83,7 @@ uv sync
 
 或者使用pip安装：
 ```bash
-pip install pyside6 pymysql mysql-replication==0.44.0 loguru
+pip install pyside6 pymysql mysql-replication==0.45.1 loguru
 ```
 
 ## 使用方法
@@ -170,7 +195,12 @@ binlog2sql_GUI/
 2. 使用的数据库用户需要有REPLICATION权限
 3. 解析大量binlog数据时可能需要较长时间
 4. 建议在测试环境中先验证解析结果的正确性
+5. **此版本仅支持MySQL 5.7，如需MySQL 8.0支持请切换到mysql-8.0分支**
 
 ## 许可证
 
 本项目采用MIT许可证。
+
+---
+
+*更多版本兼容性信息请参考 [MYSQL_VERSION_COMPATIBILITY.md](MYSQL_VERSION_COMPATIBILITY.md)*
