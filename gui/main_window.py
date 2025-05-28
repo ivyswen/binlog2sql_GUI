@@ -151,6 +151,15 @@ class MainWindow(QMainWindow):
         logger.info("初始化主窗口")
         self.config_manager = ConfigManager()
         self.parse_worker = None
+
+        # SQL批量更新相关
+        self.sql_buffer = []  # SQL缓冲区
+        self.sql_count = 0    # SQL计数
+        self.batch_size = 50  # 批量大小
+        self.update_timer = QTimer()  # 定时器
+        self.update_timer.timeout.connect(self.flush_sql_buffer)
+        self.update_timer.setSingleShot(False)
+
         self.setup_ui()
         self.load_settings()
         logger.info("主窗口初始化完成")
@@ -203,7 +212,7 @@ class MainWindow(QMainWindow):
 
     def setup_ui(self):
         """设置用户界面"""
-        self.setWindowTitle("Binlog2SQL GUI - MySQL Binlog解析工具")
+        self.setWindowTitle("MySQL Binlog解析工具")
 
         # 设置窗口图标
         self.set_window_icon()
@@ -326,7 +335,7 @@ class MainWindow(QMainWindow):
         # 起始文件
         self.start_file_edit = QLineEdit()
         self.start_file_edit.setPlaceholderText("例如: mysql-bin.000001")
-        self.start_file_edit.setText("mysql-bin.142793")
+        # self.start_file_edit.setText("mysql-bin.143375")
         binlog_layout.addRow("起始文件:", self.start_file_edit)
 
         # 起始位置
@@ -338,7 +347,7 @@ class MainWindow(QMainWindow):
         # 结束文件
         self.end_file_edit = QLineEdit()
         self.end_file_edit.setPlaceholderText("留空表示与起始文件相同")
-        self.end_file_edit.setText("mysql-bin.142794")
+        # self.end_file_edit.setText("mysql-bin.143387")
         binlog_layout.addRow("结束文件:", self.end_file_edit)
 
         # 结束位置
@@ -382,13 +391,13 @@ class MainWindow(QMainWindow):
 
         # 数据库过滤
         self.databases_edit = QLineEdit()
-        self.databases_edit.setText("tmsp")
+        # self.databases_edit.setText("tmsp")
         self.databases_edit.setPlaceholderText("多个数据库用空格分隔")
         filter_layout.addRow("数据库:", self.databases_edit)
 
         # 表过滤
         self.tables_edit = QLineEdit()
-        self.tables_edit.setText("tmsp_send_trans_turn")
+        # self.tables_edit.setText("tmsp_send_trans_turn")
         self.tables_edit.setPlaceholderText("多个表用空格分隔")
         filter_layout.addRow("表:", self.tables_edit)
 
@@ -762,12 +771,62 @@ class MainWindow(QMainWindow):
         self.on_parse_finished()
 
     def on_sql_generated(self, sql):
-        """处理生成的SQL"""
-        self.result_text.append(sql)
+        """处理生成的SQL - 使用批量更新机制"""
+        # 添加到缓冲区
+        self.sql_buffer.append(sql)
+        self.sql_count += 1
 
-        # 更新计数
-        current_count = int(self.sql_count_label.text().split(": ")[1])
-        self.sql_count_label.setText(f"SQL语句数: {current_count + 1}")
+        # 如果缓冲区达到批量大小，立即刷新
+        if len(self.sql_buffer) >= self.batch_size:
+            self.flush_sql_buffer()
+        else:
+            # 启动定时器，确保即使没有达到批量大小也会定期更新
+            if not self.update_timer.isActive():
+                self.update_timer.start(200)  # 200毫秒后更新
+
+    def flush_sql_buffer(self):
+        """刷新SQL缓冲区到UI"""
+        if not self.sql_buffer:
+            return
+
+        # 停止定时器
+        self.update_timer.stop()
+
+        try:
+            # 临时禁用语法高亮以提高性能
+            highlighter = self.sql_highlighter
+            if hasattr(self, 'sql_highlighter'):
+                self.sql_highlighter = None
+
+            # 批量添加SQL到文本框
+            cursor = self.result_text.textCursor()
+            cursor.movePosition(cursor.MoveOperation.End)
+
+            # 将所有SQL合并为一个字符串，减少UI更新次数
+            batch_text = '\n'.join(self.sql_buffer)
+            if self.result_text.toPlainText():
+                batch_text = '\n' + batch_text
+
+            cursor.insertText(batch_text)
+
+            # 更新计数
+            self.sql_count_label.setText(f"SQL语句数: {self.sql_count}")
+
+            # 清空缓冲区
+            self.sql_buffer.clear()
+
+            # 重新启用语法高亮
+            if hasattr(self, 'sql_highlighter'):
+                self.sql_highlighter = highlighter
+
+            # 滚动到底部
+            scrollbar = self.result_text.verticalScrollBar()
+            scrollbar.setValue(scrollbar.maximum())
+
+        except Exception as e:
+            logger.warning(f"刷新SQL缓冲区时发生错误: {str(e)}")
+            # 确保缓冲区被清空，避免内存泄漏
+            self.sql_buffer.clear()
 
     def on_parse_error(self, error_msg):
         """处理解析错误"""
@@ -783,6 +842,10 @@ class MainWindow(QMainWindow):
     def on_parse_finished(self):
         """解析完成"""
         logger.info("解析任务完成")
+
+        # 刷新剩余的SQL缓冲区
+        self.flush_sql_buffer()
+
         self.start_btn.setEnabled(True)
         self.stop_btn.setEnabled(False)
         self.progress_bar.setVisible(False)
@@ -795,6 +858,11 @@ class MainWindow(QMainWindow):
         """清空结果"""
         self.result_text.clear()
         self.sql_count_label.setText("SQL语句数: 0")
+
+        # 重置批量更新相关状态
+        self.sql_buffer.clear()
+        self.sql_count = 0
+        self.update_timer.stop()
 
     def copy_results(self):
         """复制全部结果"""

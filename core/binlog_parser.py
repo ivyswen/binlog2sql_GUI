@@ -413,7 +413,7 @@ class BinlogParser(object):
         event_count = 0
         skipped_count = 0
         consecutive_errors = 0
-        max_consecutive_errors = 10  # 最大连续错误数
+        max_consecutive_errors = 1000  # 最大连续错误数
 
         logger.info("启动安全事件迭代器...")
 
