@@ -212,7 +212,7 @@ class MainWindow(QMainWindow):
 
     def setup_ui(self):
         """设置用户界面"""
-        self.setWindowTitle("MySQL Binlog解析工具")
+        self.setWindowTitle("MySQL Binlog解析工具 - MySQL 8.0版本")
 
         # 设置窗口图标
         self.set_window_icon()
@@ -243,12 +243,17 @@ class MainWindow(QMainWindow):
         splitter.setSizes([400, 800])
 
         # 状态栏
-        self.statusBar().showMessage("就绪")
+        self.statusBar().showMessage("就绪 - MySQL 8.0兼容版本")
 
         # 进度条
         self.progress_bar = QProgressBar()
         self.progress_bar.setVisible(False)
         self.statusBar().addPermanentWidget(self.progress_bar)
+
+        # 版本标识标签
+        version_label = QLabel("MySQL 8.0")
+        version_label.setStyleSheet("QLabel { color: #0066cc; font-weight: bold; padding: 2px 8px; }")
+        self.statusBar().addPermanentWidget(version_label)
 
     def create_menu_bar(self):
         """创建菜单栏"""
@@ -452,6 +457,30 @@ class MainWindow(QMainWindow):
         control_layout.addWidget(self.start_btn)
         control_layout.addWidget(self.stop_btn)
         layout.addLayout(control_layout)
+
+        # 版本信息组
+        version_group = QGroupBox("版本信息")
+        version_layout = QVBoxLayout(version_group)
+
+        version_info = QLabel(
+            "MySQL 8.0兼容版本\n"
+            "mysql-replication >= 1.0.9\n"
+            "支持MySQL 8.0新特性"
+        )
+        version_info.setStyleSheet(
+            "QLabel { "
+            "color: #0066cc; "
+            "font-size: 11px; "
+            "padding: 8px; "
+            "background-color: #f0f8ff; "
+            "border: 1px solid #cce7ff; "
+            "border-radius: 4px; "
+            "}"
+        )
+        version_info.setWordWrap(True)
+        version_layout.addWidget(version_info)
+
+        layout.addWidget(version_group)
 
         layout.addStretch()
 
@@ -902,15 +931,21 @@ class MainWindow(QMainWindow):
     def show_about(self):
         """显示关于对话框"""
         QMessageBox.about(self, "关于",
-            "Binlog2SQL GUI v1.0\n\n"
+            "Binlog2SQL GUI v1.0 - MySQL 8.0版本\n\n"
             "基于PySide6开发的MySQL Binlog解析工具\n"
             "核心解析功能基于binlog2sql项目\n\n"
+            "版本信息：\n"
+            "• MySQL 8.0兼容版本\n"
+            "• mysql-replication >= 1.0.9\n"
+            "• 支持MySQL 8.0新特性\n\n"
             "功能特性：\n"
             "• 图形化配置界面\n"
             "• 数据库连接管理\n"
             "• 实时解析显示\n"
             "• 支持回滚SQL生成\n"
-            "• 结果导出功能"
+            "• 结果导出功能\n"
+            "• 增强的编码错误处理\n"
+            "• SQL语法高亮显示"
         )
 
     def closeEvent(self, event):

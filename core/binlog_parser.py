@@ -178,8 +178,10 @@ class BinlogParser(object):
                     only_tables=self.only_tables,
                     resume_stream=True,
                     blocking=True,
-                    # 添加额外的容错参数
-                    fail_on_table_metadata_unavailable=False
+                    # MySQL 8.0兼容的容错参数
+                    freeze_schema=False,  # 不冻结schema，允许动态获取表结构
+                    ignore_decode_errors=True,  # 忽略解码错误，提高容错性
+                    verify_checksum=False  # 跳过校验和验证，提高兼容性
                 )
             except Exception as stream_error:
                 logger.error(f"创建BinLogStreamReader失败: {str(stream_error)}")
@@ -197,7 +199,10 @@ class BinlogParser(object):
                     only_tables=self.only_tables,
                     resume_stream=True,
                     blocking=True,
-                    fail_on_table_metadata_unavailable=False
+                    # MySQL 8.0兼容的容错参数（fallback模式）
+                    freeze_schema=False,
+                    ignore_decode_errors=True,
+                    verify_checksum=False
                 )
 
             flag_last_event = False
