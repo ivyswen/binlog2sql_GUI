@@ -65,10 +65,10 @@ def detect_mysql_version():
             print(f"原因: MySQL {major_version}.{minor_version} 需要 mysql-replication>=1.0.0")
             recommended_branch = "mysql-8.0"
         else:
-            print(f"✅ 推荐使用: main 分支")
-            print(f"命令: git checkout main")
+            print(f"✅ 推荐使用: master 分支")
+            print(f"命令: git checkout master")
             print(f"原因: MySQL {major_version}.{minor_version} 需要 mysql-replication<=0.45.1")
-            recommended_branch = "main"
+            recommended_branch = "master"
         
         # 检查当前分支
         try:
@@ -118,7 +118,7 @@ def show_branch_info():
     print("┌─────────────────┬──────────────────┬─────────────────────┐")
     print("│ MySQL版本       │ 推荐分支         │ mysql-replication   │")
     print("├─────────────────┼──────────────────┼─────────────────────┤")
-    print("│ 5.5, 5.6, 5.7   │ main             │ 0.45.1              │")
+    print("│ 5.5, 5.6, 5.7   │ master             │ 0.45.1              │")
     print("│ 8.0+            │ mysql-8.0        │ >=1.0.9             │")
     print("└─────────────────┴──────────────────┴─────────────────────┘")
 
@@ -146,7 +146,7 @@ def main():
             print("- 确保使用 mysql-8.0 分支以获得最佳兼容性")
         else:
             print("- MySQL 5.7使用经过充分测试的稳定版本")
-            print("- 确保使用 main 分支以获得最佳兼容性")
+            print("- 确保使用 master 分支以获得最佳兼容性")
 
 if __name__ == "__main__":
     main()
