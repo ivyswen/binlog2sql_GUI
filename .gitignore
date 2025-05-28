@@ -11,3 +11,16 @@ wheels/
 config.json
 
 logs/
+test*
+demo*
+debug_encoding_issue.py
+diagnose_version_differences.py
+compare_results.py
+ENCODING_FIX_COMPREHENSIVE.md
+ENCODING_FIX_SUCCESS_REPORT.md
+final_demo.py
+FLASHBACK_MODE_FIX_SUMMARY.md
+FONT_ERROR_FIX.md
+TEMP_FILE_FIX.md
+UTF8_ENCODING_FIX_SUMMARY.md
+SQL_HIGHLIGHT_FEATURE.md

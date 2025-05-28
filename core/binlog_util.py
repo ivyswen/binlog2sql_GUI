@@ -56,6 +56,8 @@ def compare_items(items):
     """比较数据库字段值"""
     # caution: if v is NULL, may need to process
     (k, v) = items
+    # 确保key也经过编码处理
+    k = fix_object(k)
     if v is None:
         return '`%s` IS %%s' % k
     else:
@@ -112,13 +114,26 @@ def concat_sql_from_binlog_event(cursor, binlog_event, row=None, e_start_pos=Non
     if isinstance(binlog_event, WriteRowsEvent) or isinstance(binlog_event, UpdateRowsEvent) \
             or isinstance(binlog_event, DeleteRowsEvent):
         pattern = generate_sql_pattern(binlog_event, row=row, flashback=flashback, no_pk=no_pk)
-        sql = cursor.mogrify(pattern['template'], pattern['values'])
+        try:
+            sql = cursor.mogrify(pattern['template'], pattern['values'])
+            # 确保SQL是字符串类型，处理可能的bytes返回值
+            if isinstance(sql, bytes):
+                sql = sql.decode('utf-8', 'ignore')
+        except UnicodeDecodeError:
+            # 如果解码失败，使用ignore模式重试
+            if isinstance(sql, bytes):
+                sql = sql.decode('utf-8', 'ignore')
+            else:
+                # 如果不是bytes类型，转换为字符串
+                sql = str(sql)
         time = datetime.datetime.fromtimestamp(binlog_event.timestamp)
         sql += ' #start %s end %s time %s' % (e_start_pos, binlog_event.packet.log_pos, time)
     elif flashback is False and isinstance(binlog_event, QueryEvent) and binlog_event.query != 'BEGIN' \
             and binlog_event.query != 'COMMIT':
         if binlog_event.schema:
-            sql = 'USE {0};\n'.format(binlog_event.schema)
+            # 处理schema可能是bytes类型的情况
+            schema = fix_object(binlog_event.schema)
+            sql = 'USE {0};\n'.format(schema)
         sql += '{0};'.format(fix_object(binlog_event.query))
 
     return sql
@@ -133,19 +148,23 @@ def generate_sql_pattern(binlog_event, row=None, flashback=False, no_pk=False):
     if row is None:
         row = {'values': {}, 'before_values': {}, 'after_values': {}}
 
+    # 处理schema和table可能是bytes类型的情况
+    schema = fix_object(binlog_event.schema)
+    table = fix_object(binlog_event.table)
+
     if flashback is True:
         if isinstance(binlog_event, WriteRowsEvent):
             row_values = row.get('values', {})
             template = 'DELETE FROM `{0}`.`{1}` WHERE {2} LIMIT 1;'.format(
-                binlog_event.schema, binlog_event.table,
+                schema, table,
                 ' AND '.join(map(compare_items, row_values.items()))
             )
             values = map(fix_object, row_values.values())
         elif isinstance(binlog_event, DeleteRowsEvent):
             row_values = row.get('values', {})
             template = 'INSERT INTO `{0}`.`{1}`({2}) VALUES ({3});'.format(
-                binlog_event.schema, binlog_event.table,
-                ', '.join(map(lambda key: '`%s`' % key, row_values.keys())),
+                schema, table,
+                ', '.join(map(lambda key: '`%s`' % fix_object(key), row_values.keys())),
                 ', '.join(['%s'] * len(row_values))
             )
             values = map(fix_object, row_values.values())
@@ -153,8 +172,8 @@ def generate_sql_pattern(binlog_event, row=None, flashback=False, no_pk=False):
             before_values = row.get('before_values', {})
             after_values = row.get('after_values', {})
             template = 'UPDATE `{0}`.`{1}` SET {2} WHERE {3} LIMIT 1;'.format(
-                binlog_event.schema, binlog_event.table,
-                ', '.join(['`%s`=%%s' % x for x in before_values.keys()]),
+                schema, table,
+                ', '.join(['`%s`=%%s' % fix_object(x) for x in before_values.keys()]),
                 ' AND '.join(map(compare_items, after_values.items())))
             values = map(fix_object, list(before_values.values())+list(after_values.values()))
     else:
@@ -164,23 +183,23 @@ def generate_sql_pattern(binlog_event, row=None, flashback=False, no_pk=False):
                 if hasattr(binlog_event, 'primary_key') and binlog_event.primary_key:
                     row_values.pop(binlog_event.primary_key, None)
             template = 'INSERT INTO `{0}`.`{1}`({2}) VALUES ({3});'.format(
-                binlog_event.schema, binlog_event.table,
-                ', '.join(map(lambda key: '`%s`' % key, row_values.keys())),
+                schema, table,
+                ', '.join(map(lambda key: '`%s`' % fix_object(key), row_values.keys())),
                 ', '.join(['%s'] * len(row_values))
             )
             values = map(fix_object, row_values.values())
         elif isinstance(binlog_event, DeleteRowsEvent):
             row_values = row.get('values', {})
             template = 'DELETE FROM `{0}`.`{1}` WHERE {2} LIMIT 1;'.format(
-                binlog_event.schema, binlog_event.table,
+                schema, table,
                 ' AND '.join(map(compare_items, row_values.items())))
             values = map(fix_object, row_values.values())
         elif isinstance(binlog_event, UpdateRowsEvent):
             before_values = row.get('before_values', {})
             after_values = row.get('after_values', {})
             template = 'UPDATE `{0}`.`{1}` SET {2} WHERE {3} LIMIT 1;'.format(
-                binlog_event.schema, binlog_event.table,
-                ', '.join(['`%s`=%%s' % k for k in after_values.keys()]),
+                schema, table,
+                ', '.join(['`%s`=%%s' % fix_object(k) for k in after_values.keys()]),
                 ' AND '.join(map(compare_items, before_values.items()))
             )
             values = map(fix_object, list(after_values.values())+list(before_values.values()))

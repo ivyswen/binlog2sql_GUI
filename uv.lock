@@ -16,7 +16,7 @@ dependencies = [
 [package.metadata]
 requires-dist = [
     { name = "loguru", specifier = ">=0.7.3" },
-    { name = "mysql-replication", specifier = "==0.44.0" },
+    { name = "mysql-replication", specifier = "==0.46.0" },
     { name = "pymysql", specifier = ">=1.1.1" },
     { name = "pyside6", specifier = ">=6.9.0" },
 ]
@@ -45,12 +45,12 @@ wheels = [
 
 [[package]]
 name = "mysql-replication"
-version = "0.44.0"
+version = "0.46"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "pymysql" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/4e/d0/703f7d777b8e1f0078c9699dbfc151c953b3ea49d7fd68d90d29cbdeb9dd/mysql-replication-0.44.0.tar.gz", hash = "sha256:3692dbe111d758a90ad6dd0fb1afb4f631fc0fc7889eb52557960cde2403502f", size = 54765, upload-time = "2023-09-12T18:11:58.736Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/03/30/fc9a3c570265d4b016a2d81cd15f98e7ce07e918baf7af1b64e091952091/mysql_replication-0.46.tar.gz", hash = "sha256:7b4a351cf7c494a3b7bf9e4c6b0e9b97036707b4aaf82c7efcc059d83dd277b7", size = 56343, upload-time = "2024-10-25T06:56:40.895Z" }
 
 [[package]]
 name = "pymysql"

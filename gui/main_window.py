@@ -13,13 +13,14 @@ from PySide6.QtWidgets import (
     QApplication
 )
 from PySide6.QtCore import Qt, QDateTime, QThread, Signal, QTimer
-from PySide6.QtGui import QAction, QFont
+from PySide6.QtGui import QAction, QFont, QFontDatabase
 
 # 添加项目根目录到Python路径
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from gui.config_manager import ConfigManager
 from gui.connection_dialog import ConnectionDialog
+from gui.sql_highlighter import SqlHighlighter
 from core.binlog_parser import BinlogParser
 from core.logger import get_logger
 
@@ -68,6 +69,36 @@ class MainWindow(QMainWindow):
         self.setup_ui()
         self.load_settings()
         logger.info("主窗口初始化完成")
+
+    def get_safe_monospace_font(self):
+        """获取安全的等宽字体，带有回退机制"""
+        # 定义等宽字体优先级列表
+        font_candidates = [
+            "Consolas",           # Windows 首选
+            "Monaco",             # macOS 首选
+            "DejaVu Sans Mono",   # Linux 常见
+            "Liberation Mono",    # Linux 常见
+            "Courier New",        # 跨平台通用
+            "monospace"           # 系统默认等宽字体
+        ]
+
+        font_db = QFontDatabase()
+        available_fonts = font_db.families()
+
+        # 查找第一个可用的字体
+        for font_name in font_candidates:
+            if font_name in available_fonts or font_name == "monospace":
+                font = QFont(font_name, 10)
+                font.setStyleHint(QFont.StyleHint.Monospace)
+                logger.info(f"使用字体: {font_name}")
+                return font
+
+        # 如果都不可用，使用系统默认等宽字体
+        font = QFont()
+        font.setStyleHint(QFont.StyleHint.Monospace)
+        font.setPointSize(10)
+        logger.warning("使用系统默认等宽字体")
+        return font
 
     def setup_ui(self):
         """设置用户界面"""
@@ -191,6 +222,7 @@ class MainWindow(QMainWindow):
         # 起始文件
         self.start_file_edit = QLineEdit()
         self.start_file_edit.setPlaceholderText("例如: mysql-bin.000001")
+        self.start_file_edit.setText("mysql-bin.142793")
         binlog_layout.addRow("起始文件:", self.start_file_edit)
 
         # 起始位置
@@ -202,6 +234,7 @@ class MainWindow(QMainWindow):
         # 结束文件
         self.end_file_edit = QLineEdit()
         self.end_file_edit.setPlaceholderText("留空表示与起始文件相同")
+        self.end_file_edit.setText("mysql-bin.142794")
         binlog_layout.addRow("结束文件:", self.end_file_edit)
 
         # 结束位置
@@ -216,6 +249,12 @@ class MainWindow(QMainWindow):
         # 时间过滤组
         time_group = QGroupBox("时间过滤")
         time_layout = QFormLayout(time_group)
+
+        # 时间过滤开关
+        self.enable_time_filter = QCheckBox("启用时间过滤")
+        self.enable_time_filter.setChecked(True)
+        self.enable_time_filter.toggled.connect(self.on_time_filter_toggled)
+        time_layout.addRow("", self.enable_time_filter)
 
         # 开始时间
         self.start_time_edit = QDateTimeEdit()
@@ -239,11 +278,13 @@ class MainWindow(QMainWindow):
 
         # 数据库过滤
         self.databases_edit = QLineEdit()
+        self.databases_edit.setText("tmsp")
         self.databases_edit.setPlaceholderText("多个数据库用空格分隔")
         filter_layout.addRow("数据库:", self.databases_edit)
 
         # 表过滤
         self.tables_edit = QLineEdit()
+        self.tables_edit.setText("tmsp_send_trans_turn")
         self.tables_edit.setPlaceholderText("多个表用空格分隔")
         filter_layout.addRow("表:", self.tables_edit)
 
@@ -337,8 +378,14 @@ class MainWindow(QMainWindow):
 
         # 结果文本框
         self.result_text = QTextEdit()
-        self.result_text.setFont(QFont("Consolas", 10))
+        # 使用安全的等宽字体，带有回退机制
+        monospace_font = self.get_safe_monospace_font()
+        self.result_text.setFont(monospace_font)
         self.result_text.setReadOnly(True)
+
+        # 应用SQL语法高亮
+        self.sql_highlighter = SqlHighlighter(self.result_text.document())
+
         result_layout.addWidget(self.result_text)
 
         layout.addWidget(result_group)
@@ -368,6 +415,11 @@ class MainWindow(QMainWindow):
         self.no_pk_check.setChecked(parse_settings.get("no_pk", False))
         self.back_interval_spin.setValue(parse_settings.get("back_interval", 1.0))
 
+        # 加载时间过滤设置
+        enable_time_filter = parse_settings.get("enable_time_filter", True)
+        self.enable_time_filter.setChecked(enable_time_filter)
+        self.on_time_filter_toggled(enable_time_filter)  # 触发状态更新
+
     def save_settings(self):
         """保存设置"""
         # 保存窗口设置
@@ -391,7 +443,8 @@ class MainWindow(QMainWindow):
             "only_dml": self.only_dml_check.isChecked(),
             "flashback": self.flashback_check.isChecked(),
             "no_pk": self.no_pk_check.isChecked(),
-            "back_interval": self.back_interval_spin.value()
+            "back_interval": self.back_interval_spin.value(),
+            "enable_time_filter": self.enable_time_filter.isChecked()
         }
         self.config_manager.set_parse_settings(parse_settings)
 
@@ -417,6 +470,16 @@ class MainWindow(QMainWindow):
         """连接改变事件"""
         if connection_name:
             self.config_manager.set_last_connection(connection_name)
+
+    def on_time_filter_toggled(self, checked):
+        """时间过滤开关切换事件"""
+        self.start_time_edit.setEnabled(checked)
+        self.end_time_edit.setEnabled(checked)
+
+        if checked:
+            logger.info("启用时间过滤")
+        else:
+            logger.info("禁用时间过滤")
 
     def new_connection(self):
         """新建连接"""
@@ -524,8 +587,14 @@ class MainWindow(QMainWindow):
                 return
 
             # 获取时间范围
-            start_time = self.start_time_edit.dateTime().toString("yyyy-MM-dd hh:mm:ss")
-            end_time = self.end_time_edit.dateTime().toString("yyyy-MM-dd hh:mm:ss")
+            if self.enable_time_filter.isChecked():
+                start_time = self.start_time_edit.dateTime().toString("yyyy-MM-dd hh:mm:ss")
+                end_time = self.end_time_edit.dateTime().toString("yyyy-MM-dd hh:mm:ss")
+                logger.info(f"使用时间过滤: {start_time} - {end_time}")
+            else:
+                start_time = None
+                end_time = None
+                logger.info("时间过滤已禁用，将解析所有时间范围的数据")
 
             # 获取过滤条件
             databases = self.databases_edit.text().strip().split() if self.databases_edit.text().strip() else None
