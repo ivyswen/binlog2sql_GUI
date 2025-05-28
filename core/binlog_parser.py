@@ -73,6 +73,7 @@ class BinlogParser(object):
         self.only_dml = only_dml
         self.sql_type = [t.upper() for t in sql_type] if sql_type else []
         self.binlogList = []
+        self.progress_callback = None  # 进度回调函数
 
         # 初始化数据库连接并获取binlog信息
         self._init_connection()
@@ -124,6 +125,15 @@ class BinlogParser(object):
         except Exception as e:
             logger.error(f"数据库连接失败: {str(e)}")
             raise ValueError(f'数据库连接失败: {str(e)}')
+
+    def set_progress_callback(self, callback):
+        """设置进度回调函数"""
+        self.progress_callback = callback
+
+    @property
+    def binlog_list(self):
+        """获取binlog文件列表"""
+        return self.binlogList
 
     def process_binlog(self, callback=None):
         """
@@ -205,7 +215,51 @@ class BinlogParser(object):
                 with self.connection.cursor() as cursor:
                     # 使用安全的事件迭代器，自动处理编码错误
                     logger.info("开始使用安全事件迭代器处理binlog事件...")
+
+                    # 初始化进度跟踪
+                    current_file_name = self.start_file
+
+                    # 发送初始进度（只传递文件名）
+                    if self.progress_callback:
+                        self.progress_callback(current_file_name)
+
+                    event_count = 0
                     for binlog_event in self._safe_event_iterator(stream):
+                        event_count += 1
+
+                        # 检查是否切换到新文件 - 使用多种方法检测
+                        new_file_name = None
+
+                        # 方法1：检查packet.log_file属性
+                        if hasattr(binlog_event, 'packet') and hasattr(binlog_event.packet, 'log_file'):
+                            new_file_name = binlog_event.packet.log_file
+
+                        # 方法2：检查RotateEvent（文件轮转事件）
+                        elif isinstance(binlog_event, RotateEvent):
+                            if hasattr(binlog_event, 'next_binlog'):
+                                new_file_name = binlog_event.next_binlog
+                                logger.info(f"检测到RotateEvent，下一个文件: {new_file_name}")
+
+                        # 如果检测到文件切换
+                        if new_file_name and new_file_name != current_file_name:
+                            current_file_name = new_file_name
+                            # logger.info(f"切换到新的binlog文件: {current_file_name}")
+
+                            # 文件切换时更新进度（只传递文件名）
+                            if self.progress_callback:
+                                try:
+                                    self.progress_callback(current_file_name)
+                                except Exception as callback_error:
+                                    logger.warning(f"进度回调执行失败: {str(callback_error)}")
+                                    # 不要因为进度回调失败而中断解析
+
+                        # 每处理2000个事件也发送一次进度更新（即使没有文件切换）
+                        if event_count % 2000 == 0 and self.progress_callback:
+                            try:
+                                self.progress_callback(current_file_name)
+                            except Exception as callback_error:
+                                logger.warning(f"进度回调执行失败: {str(callback_error)}")
+                                # 不要因为进度回调失败而中断解析
                         try:
                             # 首先修复事件中的编码问题
                             try:
@@ -376,8 +430,8 @@ class BinlogParser(object):
                     consecutive_errors = 0  # 重置连续错误计数
 
                     # 每处理500个事件记录一次进度
-                    if event_count % 500 == 0:
-                        logger.info(f"已处理 {event_count} 个事件，跳过 {skipped_count} 个问题事件")
+                    # if event_count % 500 == 0:
+                    #     logger.info(f"已处理 {event_count} 个事件，跳过 {skipped_count} 个问题事件")
 
                 except StopIteration:
                     # 正常结束

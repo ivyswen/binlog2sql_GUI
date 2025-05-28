@@ -13,7 +13,7 @@ from PySide6.QtWidgets import (
     QApplication
 )
 from PySide6.QtCore import Qt, QDateTime, QThread, Signal, QTimer
-from PySide6.QtGui import QAction, QFont, QFontDatabase
+from PySide6.QtGui import QAction, QFont, QFontDatabase, QIcon
 
 # 添加项目根目录到Python路径
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -34,19 +34,104 @@ class ParseWorker(QThread):
     sql_generated = Signal(str)  # SQL生成信号
     error_occurred = Signal(str)  # 错误信号
     finished = Signal()  # 完成信号
+    progress_updated = Signal(int, str)  # 进度更新信号 (百分比, 状态信息)
 
     def __init__(self, parser):
         super().__init__()
         self.parser = parser
         self.is_running = True
+        self.total_files = 0
+        self.current_file_index = 0
+        self.current_file_name = ""
 
     def run(self):
         """运行解析任务"""
         try:
+            logger.info("ParseWorker开始运行")
+
+            # 获取要解析的binlog文件范围
+            start_file = self.parser.start_file
+            end_file = self.parser.end_file or start_file
+            logger.info(f"解析文件范围: {start_file} 到 {end_file}")
+
+            # 获取所有可用的binlog文件
+            try:
+                all_binlog_files = self.parser.get_binlog_files()
+                logger.info(f"获取到的binlog文件列表: {all_binlog_files}")
+            except Exception as e:
+                logger.error(f"获取binlog文件列表失败: {str(e)}")
+                # 使用解析器内部的binlog列表作为备选
+                all_binlog_files = self.parser.binlog_list
+                logger.info(f"使用解析器内部的binlog列表: {all_binlog_files}")
+
+            # 计算要处理的文件范围
+            if start_file in all_binlog_files and end_file in all_binlog_files:
+                start_index = all_binlog_files.index(start_file)
+                end_index = all_binlog_files.index(end_file)
+                self.file_range = all_binlog_files[start_index:end_index + 1]
+                self.total_files = len(self.file_range)
+                logger.info(f"计算出的文件范围: {self.file_range}, 总文件数: {self.total_files}")
+            else:
+                # 如果文件不在列表中，使用解析器内部的binlog列表
+                if hasattr(self.parser, 'binlogList') and self.parser.binlogList:
+                    self.file_range = self.parser.binlogList
+                    self.total_files = len(self.file_range)
+                    logger.info(f"使用解析器内部binlog列表: {self.file_range}, 总文件数: {self.total_files}")
+                else:
+                    # 最后的备选方案
+                    self.file_range = [start_file]
+                    self.total_files = 1
+                    logger.warning(f"无法获取文件列表，使用单文件模式: {self.file_range}")
+
+            self.progress_updated.emit(0, f"准备解析 {self.total_files} 个binlog文件: {start_file} 到 {end_file}")
+
+            # 设置进度回调
+            logger.info("设置进度回调函数")
+            self.parser.set_progress_callback(self.update_progress)
+
+            logger.info("开始调用process_binlog")
             self.parser.process_binlog(callback=self.emit_sql)
+            self.progress_updated.emit(100, "解析完成")
             self.finished.emit()
         except Exception as e:
+            logger.error(f"ParseWorker运行时发生错误: {str(e)}")
             self.error_occurred.emit(str(e))
+
+    def update_progress(self, current_file_name):
+        """更新进度 - 仅基于binlog文件数量计算"""
+        try:
+            # 动态扩展文件范围以适应实际解析的文件
+            if hasattr(self, 'file_range') and current_file_name not in self.file_range:
+                # 如果当前文件不在范围内，动态添加到范围中
+                self.file_range.append(current_file_name)
+                self.total_files = len(self.file_range)
+                logger.info(f"动态扩展文件范围，新增文件: {current_file_name}, 总文件数: {self.total_files}")
+
+            # 计算进度
+            if hasattr(self, 'file_range') and current_file_name in self.file_range:
+                current_file_index = self.file_range.index(current_file_name)
+                # 简单的文件进度：每个文件占用相等的进度空间
+                progress = (current_file_index / max(self.total_files, 1)) * 100
+                status_msg = f"正在解析: {current_file_name} ({current_file_index + 1}/{self.total_files})"
+            else:
+                # 如果仍然无法计算，显示基本进度
+                progress = 50  # 显示50%作为默认进度
+                status_msg = f"正在解析: {current_file_name}"
+                logger.warning(f"无法计算进度，使用默认进度50%")
+
+            # 确保进度在合理范围内
+            progress = max(0, min(int(progress), 95))  # 最大95%，留5%给完成
+
+            # 发射进度信号
+            self.progress_updated.emit(progress, status_msg)
+
+        except Exception as e:
+            # 进度更新失败时发送基本信号
+            logger.warning(f"更新进度时发生错误: {str(e)}")
+            try:
+                self.progress_updated.emit(10, f"正在解析: {current_file_name}")
+            except:
+                pass
 
     def emit_sql(self, sql):
         """发射SQL信号"""
@@ -100,9 +185,28 @@ class MainWindow(QMainWindow):
         logger.warning("使用系统默认等宽字体")
         return font
 
+    def set_window_icon(self):
+        """设置窗口图标"""
+        try:
+            # 获取图标文件路径
+            icon_path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                                   "Resources", "favicon.ico")
+
+            if os.path.exists(icon_path):
+                icon = QIcon(icon_path)
+                self.setWindowIcon(icon)
+                logger.info(f"成功设置窗口图标: {icon_path}")
+            else:
+                logger.warning(f"图标文件不存在: {icon_path}")
+        except Exception as e:
+            logger.error(f"设置窗口图标失败: {str(e)}")
+
     def setup_ui(self):
         """设置用户界面"""
         self.setWindowTitle("Binlog2SQL GUI - MySQL Binlog解析工具")
+
+        # 设置窗口图标
+        self.set_window_icon()
 
         # 创建菜单栏
         self.create_menu_bar()
@@ -627,12 +731,14 @@ class MainWindow(QMainWindow):
             self.parse_worker.sql_generated.connect(self.on_sql_generated)
             self.parse_worker.error_occurred.connect(self.on_parse_error)
             self.parse_worker.finished.connect(self.on_parse_finished)
+            self.parse_worker.progress_updated.connect(self.on_progress_updated)
 
             # 更新UI状态
             self.start_btn.setEnabled(False)
             self.stop_btn.setEnabled(True)
             self.progress_bar.setVisible(True)
-            self.progress_bar.setRange(0, 0)  # 不确定进度
+            self.progress_bar.setRange(0, 100)  # 设置为百分比进度
+            self.progress_bar.setValue(0)
             self.statusBar().showMessage("正在解析binlog...")
 
             # 启动解析
@@ -668,6 +774,11 @@ class MainWindow(QMainWindow):
         logger.error(f"解析过程中发生错误: {error_msg}")
         QMessageBox.critical(self, "解析错误", error_msg)
         self.on_parse_finished()
+
+    def on_progress_updated(self, percentage, status_msg):
+        """处理进度更新"""
+        self.progress_bar.setValue(percentage)
+        self.statusBar().showMessage(status_msg)
 
     def on_parse_finished(self):
         """解析完成"""

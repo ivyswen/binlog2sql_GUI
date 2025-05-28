@@ -24,6 +24,38 @@ def main():
     app.setApplicationName("Binlog2SQL GUI")
     app.setApplicationVersion("1.0")
     app.setOrganizationName("Binlog2SQL")
+    app.setApplicationDisplayName("Binlog2SQL GUI")  # 添加显示名称
+
+    # 设置Windows应用程序ID（用于任务栏图标）
+    try:
+        if sys.platform == "win32":
+            import ctypes
+            myappid = 'binlog2sql.gui.app.1.0'  # 应用程序唯一标识
+            ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(myappid)
+            logger.info(f"设置Windows应用程序ID: {myappid}")
+    except Exception as e:
+        logger.warning(f"设置Windows应用程序ID失败: {str(e)}")
+
+    # 设置应用程序图标（增强版）
+    try:
+        from PySide6.QtGui import QIcon
+        icon_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "Resources", "favicon.ico")
+        if os.path.exists(icon_path):
+            icon = QIcon(icon_path)
+
+            # 方法1：设置应用程序级图标（影响任务栏）
+            app.setWindowIcon(icon)
+
+            # 方法2：确保图标不为空
+            if not icon.isNull():
+                logger.info(f"成功设置应用程序图标: {icon_path}")
+                logger.info(f"图标可用尺寸: {[f'{s.width()}x{s.height()}' for s in icon.availableSizes()]}")
+            else:
+                logger.warning("图标文件加载后为空，可能格式不正确")
+        else:
+            logger.warning(f"应用程序图标文件不存在: {icon_path}")
+    except Exception as e:
+        logger.warning(f"设置应用程序图标失败: {str(e)}")
 
     # 设置高DPI支持
     # PySide6中高DPI支持默认启用，无需手动设置

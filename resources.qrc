@@ -1,0 +1,7 @@
+<!DOCTYPE RCC>
+<RCC version="1.0">
+    <qresource prefix="/">
+        <file>Resources/favicon.ico</file>
+        <file>Resources/icon-192.png</file>
+    </qresource>
+</RCC>
