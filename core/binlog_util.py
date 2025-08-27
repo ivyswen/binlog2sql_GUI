@@ -82,7 +82,7 @@ def fix_object(value):
 
 
 def add_rollback_comment(sql):
-    """为回滚SQL语句添加注释提醒"""
+    """为回滚SQL语句添加注释提醒（已弃用，保留用于兼容性）"""
     if not sql or not sql.strip():
         return sql
 
@@ -91,6 +91,16 @@ def add_rollback_comment(sql):
 
     # 在SQL语句前添加注释
     return f"{comment}\n{sql}"
+
+
+def get_rollback_start_comment():
+    """获取回滚SQL开始注释"""
+    return "-- 回滚语句开始：请谨慎执行，建议先在测试环境验证\n"
+
+
+def get_rollback_end_comment():
+    """获取回滚SQL结束注释"""
+    return "-- 回滚语句结束：以上SQL已按时间倒序排列，请谨慎执行"
 
 
 def is_dml_event(event):
@@ -140,10 +150,6 @@ def concat_sql_from_binlog_event(cursor, binlog_event, row=None, e_start_pos=Non
                 sql = str(sql)
         time = datetime.datetime.fromtimestamp(binlog_event.timestamp)
         sql += ' #start %s end %s time %s' % (e_start_pos, binlog_event.packet.log_pos, time)
-
-        # 如果是flashback模式，在SQL语句前添加注释提醒
-        if flashback:
-            sql = add_rollback_comment(sql)
 
     elif flashback is False and isinstance(binlog_event, QueryEvent) and binlog_event.query != 'BEGIN' \
             and binlog_event.query != 'COMMIT':

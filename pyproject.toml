@@ -6,7 +6,7 @@ readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
     "loguru>=0.7.3",
-    "mysql-replication==0.45.1",  # 最后一个稳定支持MySQL 5.7的版本
+    "mysql-replication==0.46.0",  # 最后一个稳定支持MySQL 5.7的版本
     "pymysql>=1.1.1",
     "pyside6>=6.9.0",
 ]
