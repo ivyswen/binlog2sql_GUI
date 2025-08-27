@@ -604,53 +604,90 @@ class BinlogParser(object):
     def _print_rollback_sql(self, filename, callback=None):
         """打印回滚SQL"""
         try:
+            # 导入注释函数
+            from .binlog_util import get_rollback_start_comment, get_rollback_end_comment
+
+            # 首先输出开始注释
+            start_comment = get_rollback_start_comment()
+            if callback:
+                callback(start_comment.rstrip())
+            else:
+                print(start_comment.rstrip())
+
             with open(filename, "rb") as f_tmp:
                 batch_size = 1000
                 i = 0
+                sql_count = 0  # 记录SQL语句数量
+
                 for line in reversed_lines(f_tmp):
                     sql = line.rstrip()
 
-                    # 确保回滚SQL有注释提醒（防止某些情况下注释丢失）
-                    if sql and not sql.startswith('--') and not sql.startswith('SELECT SLEEP'):
-                        # 如果SQL不是以注释开头且不是SLEEP语句，确保添加注释
-                        if '-- 回滚语句：' not in sql:
-                            from .binlog_util import add_rollback_comment
-                            sql = add_rollback_comment(sql)
+                    # 只输出非空的SQL语句，不添加单独的注释
+                    if sql and sql.strip():
+                        sql_count += 1
+                        if callback:
+                            callback(sql)
+                        else:
+                            print(sql)
 
+                        if i >= batch_size:
+                            i = 0
+                            if self.back_interval:
+                                sleep_sql = 'SELECT SLEEP(%s);' % self.back_interval
+                                if callback:
+                                    callback(sleep_sql)
+                                else:
+                                    print(sleep_sql)
+                        else:
+                            i += 1
+
+                # 输出结束注释
+                if sql_count > 0:  # 只有当有SQL语句时才输出结束注释
+                    end_comment = get_rollback_end_comment()
                     if callback:
-                        callback(sql)
+                        callback("")  # 空行分隔
+                        callback(end_comment)
                     else:
-                        print(sql)
-
-                    if i >= batch_size:
-                        i = 0
-                        if self.back_interval:
-                            sleep_sql = 'SELECT SLEEP(%s);' % self.back_interval
-                            if callback:
-                                callback(sleep_sql)
-                            else:
-                                print(sleep_sql)
-                    else:
-                        i += 1
+                        print("")  # 空行分隔
+                        print(end_comment)
         except UnicodeDecodeError as e:
             logger.error(f"读取临时文件时发生UTF-8解码错误: {str(e)}")
             # 尝试使用ignore模式重新读取
             try:
+                # 导入注释函数
+                from .binlog_util import get_rollback_start_comment, get_rollback_end_comment
+
+                # 首先输出开始注释
+                start_comment = get_rollback_start_comment()
+                if callback:
+                    callback(start_comment.rstrip())
+                else:
+                    print(start_comment.rstrip())
+
                 with open(filename, "r", encoding="utf-8", errors="ignore") as f_tmp:
                     lines = f_tmp.readlines()
+                    sql_count = 0  # 记录SQL语句数量
+
                     for line in reversed(lines):
                         sql = line.rstrip()
 
-                        # 确保回滚SQL有注释提醒（fallback模式）
-                        if sql and not sql.startswith('--') and not sql.startswith('SELECT SLEEP'):
-                            if '-- 回滚语句：' not in sql:
-                                from .binlog_util import add_rollback_comment
-                                sql = add_rollback_comment(sql)
+                        # 只输出非空的SQL语句，不添加单独的注释
+                        if sql and sql.strip():
+                            sql_count += 1
+                            if callback:
+                                callback(sql)
+                            else:
+                                print(sql)
 
-                        if sql and callback:
-                            callback(sql)
-                        elif sql:
-                            print(sql)
+                    # 输出结束注释
+                    if sql_count > 0:  # 只有当有SQL语句时才输出结束注释
+                        end_comment = get_rollback_end_comment()
+                        if callback:
+                            callback("")  # 空行分隔
+                            callback(end_comment)
+                        else:
+                            print("")  # 空行分隔
+                            print(end_comment)
             except Exception as e2:
                 logger.error(f"使用ignore模式读取临时文件也失败: {str(e2)}")
                 raise e

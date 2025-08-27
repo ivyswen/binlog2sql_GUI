@@ -1,7 +1,7 @@
 [project]
 name = "binlog2sql-gui"
 version = "0.1.0"
-description = "Add your description here"
+description = "MySQL Binlog to SQL GUI Tool - MySQL 8.0 Compatible Version"
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
