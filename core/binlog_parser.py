@@ -604,6 +604,14 @@ class BinlogParser(object):
                 i = 0
                 for line in reversed_lines(f_tmp):
                     sql = line.rstrip()
+
+                    # 确保回滚SQL有注释提醒（防止某些情况下注释丢失）
+                    if sql and not sql.startswith('--') and not sql.startswith('SELECT SLEEP'):
+                        # 如果SQL不是以注释开头且不是SLEEP语句，确保添加注释
+                        if '-- 回滚语句：' not in sql:
+                            from .binlog_util import add_rollback_comment
+                            sql = add_rollback_comment(sql)
+
                     if callback:
                         callback(sql)
                     else:
@@ -627,6 +635,13 @@ class BinlogParser(object):
                     lines = f_tmp.readlines()
                     for line in reversed(lines):
                         sql = line.rstrip()
+
+                        # 确保回滚SQL有注释提醒（fallback模式）
+                        if sql and not sql.startswith('--') and not sql.startswith('SELECT SLEEP'):
+                            if '-- 回滚语句：' not in sql:
+                                from .binlog_util import add_rollback_comment
+                                sql = add_rollback_comment(sql)
+
                         if sql and callback:
                             callback(sql)
                         elif sql:
