@@ -161,6 +161,11 @@ class MainWindow(QMainWindow):
         self.update_timer.timeout.connect(self.flush_sql_buffer)
         self.update_timer.setSingleShot(False)
 
+        # SQL关键字过滤相关
+        self.keyword_filters = []  # 关键字过滤列表
+        self.filtered_sql_count = 0  # 被过滤的SQL计数
+        self.matched_sql_count = 0  # 匹配的SQL计数
+
         self.setup_ui()
         self.load_settings()
         logger.info("主窗口初始化完成")
@@ -410,6 +415,22 @@ class MainWindow(QMainWindow):
         self.tables_edit.setPlaceholderText("多个表用空格分隔")
         filter_layout.addRow("表:", self.tables_edit)
 
+        # SQL关键字过滤
+        keyword_filter_layout = QHBoxLayout()
+        self.enable_keyword_filter = QCheckBox("启用关键字过滤")
+        self.enable_keyword_filter.setChecked(False)
+        keyword_filter_layout.addWidget(self.enable_keyword_filter)
+
+        self.keyword_filter_edit = QLineEdit()
+        self.keyword_filter_edit.setPlaceholderText("输入关键字，多个关键字用空格分隔（如：UPDATE DELETE）")
+        self.keyword_filter_edit.setEnabled(False)
+        keyword_filter_layout.addWidget(self.keyword_filter_edit)
+
+        # 连接复选框信号以启用/禁用文本框
+        self.enable_keyword_filter.toggled.connect(self.keyword_filter_edit.setEnabled)
+
+        filter_layout.addRow("关键字过滤:", keyword_filter_layout)
+
         layout.addWidget(filter_group)
 
         # 解析选项组
@@ -542,6 +563,13 @@ class MainWindow(QMainWindow):
         self.enable_time_filter.setChecked(enable_time_filter)
         self.on_time_filter_toggled(enable_time_filter)  # 触发状态更新
 
+        # 加载关键字过滤设置
+        enable_keyword_filter = parse_settings.get("enable_keyword_filter", False)
+        self.enable_keyword_filter.setChecked(enable_keyword_filter)
+        keyword_filter_text = parse_settings.get("keyword_filter_text", "")
+        self.keyword_filter_edit.setText(keyword_filter_text)
+        self.keyword_filter_edit.setEnabled(enable_keyword_filter)
+
     def save_settings(self):
         """保存设置"""
         # 保存窗口设置
@@ -566,7 +594,9 @@ class MainWindow(QMainWindow):
             "flashback": self.flashback_check.isChecked(),
             "no_pk": self.no_pk_check.isChecked(),
             "back_interval": self.back_interval_spin.value(),
-            "enable_time_filter": self.enable_time_filter.isChecked()
+            "enable_time_filter": self.enable_time_filter.isChecked(),
+            "enable_keyword_filter": self.enable_keyword_filter.isChecked(),
+            "keyword_filter_text": self.keyword_filter_edit.text()
         }
         self.config_manager.set_parse_settings(parse_settings)
 
@@ -861,6 +891,26 @@ class MainWindow(QMainWindow):
             # 清空结果
             self.clear_results()
 
+            # 初始化关键字过滤（必须在clear_results()之后）
+            logger.info("开始初始化关键字过滤")
+            if self.enable_keyword_filter.isChecked():
+                # 获取关键字过滤条件
+                keyword_text = self.keyword_filter_edit.text().strip()
+                logger.info(f"关键字过滤已启用，输入的关键字文本: '{keyword_text}'")
+                if keyword_text:
+                    # 支持空格和逗号分隔
+                    keywords = [kw.strip().upper() for kw in keyword_text.replace(',', ' ').split()]
+                    self.keyword_filters = [kw for kw in keywords if kw]  # 过滤空字符串
+
+                    if self.keyword_filters:
+                        logger.info(f"✓ 关键字过滤初始化成功，关键字列表: {self.keyword_filters}")
+                    else:
+                        logger.warning("关键字过滤已启用但未输入有效关键字")
+                else:
+                    logger.warning("关键字过滤已启用但未输入关键字")
+            else:
+                logger.info("关键字过滤未启用")
+
             # 创建工作线程
             self.parse_worker = ParseWorker(parser)
             self.parse_worker.sql_generated.connect(self.on_sql_generated)
@@ -898,6 +948,26 @@ class MainWindow(QMainWindow):
 
     def on_sql_generated(self, sql):
         """处理生成的SQL - 使用批量更新机制"""
+        # 检查是否需要进行关键字过滤
+        if self.enable_keyword_filter.isChecked() and self.keyword_filters:
+            # 如果启用了关键字过滤，检查SQL是否包含任意一个关键字（OR逻辑）
+            sql_upper = sql.upper()
+            matched = any(keyword in sql_upper for keyword in self.keyword_filters)
+
+            if not matched:
+                # SQL不匹配任何关键字，跳过此SQL
+                self.filtered_sql_count += 1
+                # 每过滤100条SQL记录一次日志
+                if self.filtered_sql_count % 100 == 0:
+                    logger.debug(f"已过滤 {self.filtered_sql_count} 条SQL")
+                return
+            else:
+                # SQL匹配关键字，计数
+                self.matched_sql_count += 1
+                # 每匹配10条SQL记录一次日志
+                if self.matched_sql_count % 10 == 0:
+                    logger.debug(f"已匹配 {self.matched_sql_count} 条SQL")
+
         # 添加到缓冲区
         self.sql_buffer.append(sql)
         self.sql_count += 1
@@ -972,6 +1042,18 @@ class MainWindow(QMainWindow):
         # 刷新剩余的SQL缓冲区
         self.flush_sql_buffer()
 
+        # 记录过滤统计信息
+        logger.info(f"检查关键字过滤状态 - 启用: {self.enable_keyword_filter.isChecked()}, 关键字列表: {self.keyword_filters}")
+        if self.enable_keyword_filter.isChecked() and self.keyword_filters:
+            total_processed = self.matched_sql_count + self.filtered_sql_count
+            logger.info(f"✓ 关键字过滤统计 - 总处理: {total_processed}, 匹配: {self.matched_sql_count}, 过滤: {self.filtered_sql_count}")
+            if self.matched_sql_count == 0:
+                logger.warning("未找到匹配关键字的SQL语句")
+        elif self.enable_keyword_filter.isChecked() and not self.keyword_filters:
+            logger.warning("关键字过滤已启用但关键字列表为空")
+        else:
+            logger.info("关键字过滤未启用")
+
         self.start_btn.setEnabled(True)
         self.stop_btn.setEnabled(False)
         self.progress_bar.setVisible(False)
@@ -989,6 +1071,11 @@ class MainWindow(QMainWindow):
         self.sql_buffer.clear()
         self.sql_count = 0
         self.update_timer.stop()
+
+        # 重置过滤相关状态
+        self.keyword_filters = []
+        self.filtered_sql_count = 0
+        self.matched_sql_count = 0
 
     def copy_results(self):
         """复制全部结果"""
