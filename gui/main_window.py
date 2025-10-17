@@ -4,6 +4,7 @@
 import os
 import sys
 from datetime import datetime
+import pymysql
 from PySide6.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QSplitter,
     QGroupBox, QFormLayout, QLineEdit, QSpinBox, QComboBox,
@@ -337,11 +338,11 @@ class MainWindow(QMainWindow):
         binlog_group = QGroupBox("Binlog配置")
         binlog_layout = QFormLayout(binlog_group)
 
-        # 起始文件
-        self.start_file_edit = QLineEdit()
-        self.start_file_edit.setPlaceholderText("例如: mysql-bin.000001")
-        # self.start_file_edit.setText("mysql-bin.143375")
-        binlog_layout.addRow("起始文件:", self.start_file_edit)
+        # 起始文件 - 改为QComboBox
+        self.start_file_combo = QComboBox()
+        self.start_file_combo.setEditable(True)
+        self.start_file_combo.setPlaceholderText("例如: mysql-bin.000001")
+        binlog_layout.addRow("起始文件:", self.start_file_combo)
 
         # 起始位置
         self.start_pos_spin = QSpinBox()
@@ -349,11 +350,11 @@ class MainWindow(QMainWindow):
         self.start_pos_spin.setValue(4)
         binlog_layout.addRow("起始位置:", self.start_pos_spin)
 
-        # 结束文件
-        self.end_file_edit = QLineEdit()
-        self.end_file_edit.setPlaceholderText("留空表示与起始文件相同")
-        # self.end_file_edit.setText("mysql-bin.143387")
-        binlog_layout.addRow("结束文件:", self.end_file_edit)
+        # 结束文件 - 改为QComboBox
+        self.end_file_combo = QComboBox()
+        self.end_file_combo.setEditable(True)
+        self.end_file_combo.setPlaceholderText("留空表示与起始文件相同")
+        binlog_layout.addRow("结束文件:", self.end_file_combo)
 
         # 结束位置
         self.end_pos_spin = QSpinBox()
@@ -361,6 +362,14 @@ class MainWindow(QMainWindow):
         self.end_pos_spin.setValue(0)
         self.end_pos_spin.setSpecialValueText("最新位置")
         binlog_layout.addRow("结束位置:", self.end_pos_spin)
+
+        # 获取Binlog文件列表按钮
+        fetch_binlog_layout = QHBoxLayout()
+        self.fetch_binlog_btn = QPushButton("获取Binlog文件列表")
+        self.fetch_binlog_btn.clicked.connect(self.on_fetch_binlog_files)
+        fetch_binlog_layout.addWidget(self.fetch_binlog_btn)
+        fetch_binlog_layout.addStretch()
+        binlog_layout.addRow("", fetch_binlog_layout)
 
         layout.addWidget(binlog_group)
 
@@ -612,6 +621,10 @@ class MainWindow(QMainWindow):
         """连接改变事件"""
         if connection_name:
             self.config_manager.set_last_connection(connection_name)
+            # 清空binlog文件下拉框，提示用户需要重新获取
+            self.start_file_combo.clear()
+            self.end_file_combo.clear()
+            logger.info(f"连接已改变为: {connection_name}，已清空binlog文件列表")
 
     def on_time_filter_toggled(self, checked):
         """时间过滤开关切换事件"""
@@ -682,6 +695,119 @@ class MainWindow(QMainWindow):
             self.refresh_connections()
             QMessageBox.information(self, "成功", "连接已删除")
 
+    def on_fetch_binlog_files(self):
+        """获取Binlog文件列表"""
+        logger.info("用户点击获取Binlog文件列表按钮")
+
+        # 验证连接
+        current_conn = self.connection_combo.currentText()
+        if not current_conn:
+            logger.warning("未选择数据库连接")
+            QMessageBox.warning(self, "警告", "请先选择数据库连接")
+            return
+
+        # 获取连接信息
+        conn_info = self.config_manager.get_connection(current_conn)
+        if not conn_info:
+            QMessageBox.warning(self, "警告", "连接信息不存在")
+            return
+
+        try:
+            # 更新按钮状态
+            self.fetch_binlog_btn.setEnabled(False)
+            self.fetch_binlog_btn.setText("获取中...")
+            QApplication.processEvents()
+
+            # 准备连接配置
+            connection_settings = {
+                'host': conn_info['host'],
+                'port': conn_info['port'],
+                'user': conn_info['user'],
+                'passwd': conn_info['password'],
+                'charset': conn_info['charset']
+            }
+
+            # 第一步：先通过直接SQL查询获取第一个可用的binlog文件
+            logger.info(f"正在查询第一个可用的binlog文件: {conn_info['host']}:{conn_info['port']}")
+
+            first_binlog_file = None
+            temp_connection = None
+            try:
+                # 创建临时连接以查询binlog文件列表
+                temp_connection = pymysql.connect(
+                    host=conn_info['host'],
+                    port=conn_info['port'],
+                    user=conn_info['user'],
+                    password=conn_info['password'],
+                    charset=conn_info['charset']
+                )
+
+                with temp_connection.cursor() as cursor:
+                    # 执行SHOW MASTER LOGS查询
+                    cursor.execute("SHOW MASTER LOGS")
+                    rows = cursor.fetchall()
+
+                    if rows:
+                        # 获取第一个binlog文件名
+                        first_binlog_file = rows[0][0]
+                        logger.info(f"查询到第一个binlog文件: {first_binlog_file}")
+                    else:
+                        raise Exception("未找到任何binlog文件")
+            finally:
+                if temp_connection:
+                    temp_connection.close()
+
+            # 第二步：使用获取到的第一个binlog文件创建临时解析器
+            logger.info(f"创建临时解析器以获取binlog文件列表，使用start_file: {first_binlog_file}")
+
+            temp_parser = BinlogParser(
+                connection_settings=connection_settings,
+                start_file=first_binlog_file,  # 使用查询到的第一个文件
+                start_pos=4
+            )
+
+            # 获取binlog文件列表
+            binlog_files = temp_parser.get_binlog_files()
+            logger.info(f"成功获取binlog文件列表: {binlog_files}")
+
+            if not binlog_files:
+                QMessageBox.warning(self, "警告", "未找到任何binlog文件")
+                self.fetch_binlog_btn.setEnabled(True)
+                self.fetch_binlog_btn.setText("获取Binlog文件列表")
+                return
+
+            # 清空并填充下拉框
+            self.start_file_combo.clear()
+            self.end_file_combo.clear()
+
+            for binlog_file in binlog_files:
+                self.start_file_combo.addItem(binlog_file)
+                self.end_file_combo.addItem(binlog_file)
+
+            # 设置默认值：开始文件选择第一个，结束文件选择最后一个
+            self.start_file_combo.setCurrentIndex(0)
+            self.end_file_combo.setCurrentIndex(len(binlog_files) - 1)
+
+            logger.info(f"已填充binlog文件列表，共{len(binlog_files)}个文件")
+
+            # 显示成功提示
+            QMessageBox.information(
+                self, "成功",
+                f"已获取{len(binlog_files)}个binlog文件\n"
+                f"开始文件: {binlog_files[0]}\n"
+                f"结束文件: {binlog_files[-1]}"
+            )
+
+        except Exception as e:
+            error_msg = str(e)
+            logger.error(f"获取binlog文件列表失败: {error_msg}")
+            QMessageBox.critical(self, "错误", f"获取binlog文件列表失败:\n{error_msg}")
+
+        finally:
+            # 恢复按钮状态
+            self.fetch_binlog_btn.setEnabled(True)
+            self.fetch_binlog_btn.setText("获取Binlog文件列表")
+
     def start_parse(self):
         """开始解析binlog"""
         logger.info("用户开始解析binlog")
@@ -693,7 +819,7 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, "警告", "请先选择数据库连接")
             return
 
-        start_file = self.start_file_edit.text().strip()
+        start_file = self.start_file_combo.currentText().strip()
         if not start_file:
             logger.warning("未输入起始binlog文件")
             QMessageBox.warning(self, "警告", "请输入起始binlog文件")
@@ -747,7 +873,7 @@ class MainWindow(QMainWindow):
                 connection_settings=connection_settings,
                 start_file=start_file,
                 start_pos=self.start_pos_spin.value(),
-                end_file=self.end_file_edit.text().strip() or None,
+                end_file=self.end_file_combo.currentText().strip() or None,
                 end_pos=self.end_pos_spin.value() if self.end_pos_spin.value() > 0 else None,
                 start_time=start_time,
                 stop_time=end_time,
