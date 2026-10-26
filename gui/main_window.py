@@ -3,6 +3,7 @@
 
 import os
 import sys
+import time
 from datetime import datetime
 import pymysql
 from PySide6.QtWidgets import (
@@ -33,7 +34,8 @@ logger = get_logger("MainWindow")
 class ParseWorker(QThread):
     """Binlog解析工作线程"""
 
-    sql_generated = Signal(str)  # SQL生成信号
+    sql_generated = Signal(str)  # 单条SQL生成信号（兼容）
+    sql_batch_generated = Signal(list)  # 批量SQL生成信号
     error_occurred = Signal(str)  # 错误信号
     finished = Signal()  # 完成信号
     progress_updated = Signal(int, str)  # 进度更新信号 (百分比, 状态信息)
@@ -45,6 +47,8 @@ class ParseWorker(QThread):
         self.total_files = 0
         self.current_file_index = 0
         self.current_file_name = ""
+        self.buffer = []
+        self.last_emit_time = 0.0
 
     def run(self):
         """运行解析任务"""
@@ -93,6 +97,10 @@ class ParseWorker(QThread):
 
             logger.info("开始调用process_binlog")
             self.parser.process_binlog(callback=self.emit_sql)
+            # 发射剩余未发送的SQL批次
+            if self.buffer and self.is_running:
+                self.sql_batch_generated.emit(self.buffer)
+                self.buffer = []
             self.progress_updated.emit(100, "解析完成")
             self.finished.emit()
         except Exception as e:
@@ -136,13 +144,23 @@ class ParseWorker(QThread):
                 pass
 
     def emit_sql(self, sql):
-        """发射SQL信号"""
-        if self.is_running:
-            self.sql_generated.emit(sql)
+        """发射SQL信号 - 批量聚合发射以减轻主线程事件队列压力"""
+        if not self.is_running:
+            return
+
+        self.buffer.append(sql)
+        now = time.time()
+        # 满足200条或距离上次发射超过50ms时批量发送
+        if len(self.buffer) >= 200 or (now - self.last_emit_time) >= 0.05:
+            batch = self.buffer
+            self.buffer = []
+            self.last_emit_time = now
+            self.sql_batch_generated.emit(batch)
 
     def stop(self):
         """停止解析"""
         self.is_running = False
+        self.buffer = []
 
 
 class MainWindow(QMainWindow):
@@ -157,7 +175,8 @@ class MainWindow(QMainWindow):
         # SQL批量更新相关
         self.sql_buffer = []  # SQL缓冲区
         self.sql_count = 0    # SQL计数
-        self.batch_size = 50  # 批量大小
+        self.batch_size = 500  # 批量大小提高至500
+        self.last_ui_flush_time = 0.0  # 上次UI刷新时间戳
         self.update_timer = QTimer()  # 定时器
         self.update_timer.timeout.connect(self.flush_sql_buffer)
         self.update_timer.setSingleShot(False)
@@ -578,6 +597,12 @@ class MainWindow(QMainWindow):
 
         toolbar_layout.addStretch()
 
+        # 语法高亮开关
+        self.highlight_check = QCheckBox("语法高亮")
+        self.highlight_check.setChecked(True)
+        self.highlight_check.toggled.connect(self.on_highlight_toggled)
+        toolbar_layout.addWidget(self.highlight_check)
+
         # SQL计数标签
         self.sql_count_label = QLabel("SQL语句数: 0")
         toolbar_layout.addWidget(self.sql_count_label)
@@ -960,8 +985,13 @@ class MainWindow(QMainWindow):
             # 清空结果
             self.clear_results()
 
+            # 解析期间暂时停用语法高亮，以极大提升处理性能，避免海量数据下界面卡死无响应
+            if hasattr(self, 'sql_highlighter') and self.sql_highlighter:
+                self.sql_highlighter.setDocument(None)
+
             # 创建工作线程
             self.parse_worker = ParseWorker(parser)
+            self.parse_worker.sql_batch_generated.connect(self.on_sql_batch_generated)
             self.parse_worker.sql_generated.connect(self.on_sql_generated)
             self.parse_worker.error_occurred.connect(self.on_parse_error)
             self.parse_worker.finished.connect(self.on_parse_finished)
@@ -995,19 +1025,45 @@ class MainWindow(QMainWindow):
 
         self.on_parse_finished()
 
-    def on_sql_generated(self, sql):
-        """处理生成的SQL - 使用批量更新机制"""
-        # 添加到缓冲区
-        self.sql_buffer.append(sql)
-        self.sql_count += 1
+    def on_highlight_toggled(self, checked):
+        """语法高亮切换"""
+        if hasattr(self, 'sql_highlighter') and self.sql_highlighter:
+            if checked:
+                if self.sql_count > 5000:
+                    reply = QMessageBox.question(
+                        self, "提示",
+                        f"当前已有 {self.sql_count} 条 SQL，开启语法高亮可能需要较多计算资源，确定开启吗？",
+                        QMessageBox.Yes | QMessageBox.No
+                    )
+                    if reply != QMessageBox.Yes:
+                        self.highlight_check.blockSignals(True)
+                        self.highlight_check.setChecked(False)
+                        self.highlight_check.blockSignals(False)
+                        return
+                self.sql_highlighter.setDocument(self.result_text.document())
+            else:
+                self.sql_highlighter.setDocument(None)
 
-        # 如果缓冲区达到批量大小，立即刷新
-        if len(self.sql_buffer) >= self.batch_size:
+    def on_sql_batch_generated(self, sql_list):
+        """处理批量生成的SQL - 缓冲并定时定量刷新UI"""
+        if not sql_list:
+            return
+
+        self.sql_buffer.extend(sql_list)
+        self.sql_count += len(sql_list)
+        self.sql_count_label.setText(f"SQL语句数: {self.sql_count}")
+
+        now = time.time()
+        # 满足批次大小(500)或距离上次UI刷新超过100ms时刷新，保证GUI极度流畅且绝不假死
+        if len(self.sql_buffer) >= self.batch_size or (now - self.last_ui_flush_time) >= 0.1:
             self.flush_sql_buffer()
         else:
-            # 启动定时器，确保即使没有达到批量大小也会定期更新
             if not self.update_timer.isActive():
-                self.update_timer.start(200)  # 200毫秒后更新
+                self.update_timer.start(100)
+
+    def on_sql_generated(self, sql):
+        """处理生成的单条SQL（兼容处理）"""
+        self.on_sql_batch_generated([sql])
 
     def flush_sql_buffer(self):
         """刷新SQL缓冲区到UI"""
@@ -1016,20 +1072,16 @@ class MainWindow(QMainWindow):
 
         # 停止定时器
         self.update_timer.stop()
+        self.last_ui_flush_time = time.time()
 
         try:
-            # 临时禁用语法高亮以提高性能
-            highlighter = self.sql_highlighter
-            if hasattr(self, 'sql_highlighter'):
-                self.sql_highlighter = None
-
             # 批量添加SQL到文本框
             cursor = self.result_text.textCursor()
             cursor.movePosition(cursor.MoveOperation.End)
 
             # 将所有SQL合并为一个字符串，减少UI更新次数
             batch_text = '\n'.join(self.sql_buffer)
-            if self.result_text.toPlainText():
+            if not self.result_text.document().isEmpty():
                 batch_text = '\n' + batch_text
 
             cursor.insertText(batch_text)
@@ -1040,13 +1092,12 @@ class MainWindow(QMainWindow):
             # 清空缓冲区
             self.sql_buffer.clear()
 
-            # 重新启用语法高亮
-            if hasattr(self, 'sql_highlighter'):
-                self.sql_highlighter = highlighter
-
             # 滚动到底部
             scrollbar = self.result_text.verticalScrollBar()
             scrollbar.setValue(scrollbar.maximum())
+
+            # 关键：主动处理系统事件队列，防止 Windows 判定应用程序未响应
+            QApplication.processEvents()
 
         except Exception as e:
             logger.warning(f"刷新SQL缓冲区时发生错误: {str(e)}")
@@ -1076,6 +1127,20 @@ class MainWindow(QMainWindow):
         self.progress_bar.setVisible(False)
         self.statusBar().showMessage("解析完成")
 
+        # 解析完成后，如果SQL量较小且开启了高亮，则应用语法高亮；海量数据下自动停用以保持流畅
+        if hasattr(self, 'sql_highlighter') and self.sql_highlighter:
+            if hasattr(self, 'highlight_check') and not self.highlight_check.isChecked():
+                self.sql_highlighter.setDocument(None)
+            elif self.sql_count <= 5000:
+                self.sql_highlighter.setDocument(self.result_text.document())
+            else:
+                logger.info(f"SQL 语句量较大 ({self.sql_count} 条)，已自动关闭语法高亮以避免界面卡顿")
+                if hasattr(self, 'highlight_check'):
+                    self.highlight_check.blockSignals(True)
+                    self.highlight_check.setChecked(False)
+                    self.highlight_check.blockSignals(False)
+                self.statusBar().showMessage(f"解析完成（共 {self.sql_count} 条SQL，数据量大已自动关闭高亮以保持流畅）", 10000)
+
         if self.parse_worker:
             self.parse_worker = None
 
@@ -1088,6 +1153,10 @@ class MainWindow(QMainWindow):
         self.sql_buffer.clear()
         self.sql_count = 0
         self.update_timer.stop()
+
+        if hasattr(self, 'sql_highlighter') and self.sql_highlighter:
+            if hasattr(self, 'highlight_check') and self.highlight_check.isChecked():
+                self.sql_highlighter.setDocument(self.result_text.document())
 
     def copy_results(self):
         """复制全部结果"""
