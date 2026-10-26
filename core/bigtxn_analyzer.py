@@ -7,6 +7,7 @@
 严格对齐 binlog_bigtxn.py 的统计口径与字段结构。
 """
 
+import inspect
 import datetime
 from collections import Counter
 import pymysql
@@ -141,19 +142,28 @@ class BigTxnAnalyzer(object):
 
         stream = None
         try:
-            stream = BinLogStreamReader(
-                connection_settings=stream_settings,
-                server_id=server_id,
-                log_file=self.binlog_file,
-                log_pos=4,
-                only_events=interested_events,
-                resume_stream=True,
-                blocking=False,
-                fail_on_table_metadata_unavailable=False,
-                ignore_decode_errors=True,
-                freeze_schema=False,
-                verify_checksum=False,
-            )
+            # 动态检查 BinLogStreamReader 构造参数，以兼容不同版本的 mysql-replication (0.45/0.46 与 1.0.9+)
+            sig = inspect.signature(BinLogStreamReader.__init__)
+            reader_kwargs = {
+                "connection_settings": stream_settings,
+                "server_id": server_id,
+                "log_file": self.binlog_file,
+                "log_pos": 4,
+                "only_events": interested_events,
+                "resume_stream": True,
+                "blocking": False,
+            }
+            optional_params = {
+                "fail_on_table_metadata_unavailable": False,
+                "ignore_decode_errors": True,
+                "freeze_schema": False,
+                "verify_checksum": False,
+            }
+            for k, v in optional_params.items():
+                if k in sig.parameters:
+                    reader_kwargs[k] = v
+
+            stream = BinLogStreamReader(**reader_kwargs)
 
             # 当前事务状态跟踪
             txn = None
