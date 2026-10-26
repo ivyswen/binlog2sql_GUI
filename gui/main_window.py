@@ -11,7 +11,7 @@ from PySide6.QtWidgets import (
     QPushButton, QTextEdit, QCheckBox, QDateTimeEdit, QLabel,
     QMenuBar, QMenu, QMessageBox, QProgressBar, QListWidget,
     QListWidgetItem, QFileDialog, QDoubleSpinBox, QDialog,
-    QApplication
+    QApplication, QTabWidget
 )
 from PySide6.QtCore import Qt, QDateTime, QThread, Signal, QTimer
 from PySide6.QtGui import QAction, QFont, QFontDatabase, QIcon
@@ -22,6 +22,7 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from gui.config_manager import ConfigManager
 from gui.connection_dialog import ConnectionDialog
 from gui.sql_highlighter import SqlHighlighter
+from gui.bigtxn_widget import BigTxnWidget
 from core.binlog_parser import BinlogParser
 from core.logger import get_logger
 
@@ -227,10 +228,20 @@ class MainWindow(QMainWindow):
 
         # 主布局
         main_layout = QVBoxLayout(central_widget)
+        main_layout.setContentsMargins(5, 5, 5, 5)
+
+        # 创建选项卡控件
+        self.tab_widget = QTabWidget()
+        main_layout.addWidget(self.tab_widget)
+
+        # Tab 1: SQL 解析与回滚
+        sql_parser_tab = QWidget()
+        sql_tab_layout = QVBoxLayout(sql_parser_tab)
+        sql_tab_layout.setContentsMargins(0, 0, 0, 0)
 
         # 创建分割器
         splitter = QSplitter(Qt.Horizontal)
-        main_layout.addWidget(splitter)
+        sql_tab_layout.addWidget(splitter)
 
         # 左侧配置面板
         config_panel = self.create_config_panel()
@@ -242,6 +253,13 @@ class MainWindow(QMainWindow):
 
         # 设置分割器比例
         splitter.setSizes([400, 800])
+
+        self.tab_widget.addTab(sql_parser_tab, "SQL 解析与回滚")
+
+        # Tab 2: 大事务分析
+        self.bigtxn_widget = BigTxnWidget(self.config_manager)
+        self.bigtxn_widget.view_in_sql_parser.connect(self.on_switch_to_sql_parser_with_txn)
+        self.tab_widget.addTab(self.bigtxn_widget, "大事务分析")
 
         # 状态栏
         self.statusBar().showMessage("就绪 - MySQL 8.0兼容版本")
@@ -255,6 +273,30 @@ class MainWindow(QMainWindow):
         version_label = QLabel("MySQL 8.0")
         version_label.setStyleSheet("QLabel { color: #0066cc; font-weight: bold; padding: 2px 8px; }")
         self.statusBar().addPermanentWidget(version_label)
+
+    def on_switch_to_sql_parser_with_txn(self, binlog_file, start_pos, end_pos):
+        """接收来自大事务分析页面的跳转请求，填入参数并切换到 SQL 解析 Tab"""
+        logger.info(f"带入大事务参数到 SQL 解析: file={binlog_file}, start_pos={start_pos}, end_pos={end_pos}")
+
+        # 设置起始文件与结束文件
+        if binlog_file:
+            if self.start_file_combo.findText(binlog_file) == -1:
+                self.start_file_combo.addItem(binlog_file)
+            if self.end_file_combo.findText(binlog_file) == -1:
+                self.end_file_combo.addItem(binlog_file)
+
+            self.start_file_combo.setCurrentText(binlog_file)
+            self.end_file_combo.setCurrentText(binlog_file)
+
+        # 设置起止位置
+        self.start_pos_spin.setValue(int(start_pos))
+        self.end_pos_spin.setValue(int(end_pos))
+
+        # 切换到 Tab 0 (SQL 解析与回滚)
+        self.tab_widget.setCurrentIndex(0)
+
+        msg = f"已载入大事务参数 (文件: {binlog_file}, Pos: {start_pos} ~ {end_pos})，请确认参数后点击「开始解析」"
+        self.statusBar().showMessage(msg, 10000)
 
     def create_menu_bar(self):
         """创建菜单栏"""
@@ -295,6 +337,21 @@ class MainWindow(QMainWindow):
         del_conn_action = QAction("删除连接(&D)", self)
         del_conn_action.triggered.connect(self.delete_connection)
         conn_menu.addAction(del_conn_action)
+
+        # 视图菜单
+        view_menu = menubar.addMenu("视图(&V)")
+
+        # 切换到 SQL 解析
+        view_sql_action = QAction("SQL 解析与回滚(&S)", self)
+        view_sql_action.setShortcut("Ctrl+1")
+        view_sql_action.triggered.connect(lambda: self.tab_widget.setCurrentIndex(0))
+        view_menu.addAction(view_sql_action)
+
+        # 切换到 大事务分析
+        view_bigtxn_action = QAction("大事务分析(&B)", self)
+        view_bigtxn_action.setShortcut("Ctrl+2")
+        view_bigtxn_action.triggered.connect(lambda: self.tab_widget.setCurrentIndex(1))
+        view_menu.addAction(view_bigtxn_action)
 
         # 帮助菜单
         help_menu = menubar.addMenu("帮助(&H)")
@@ -617,6 +674,11 @@ class MainWindow(QMainWindow):
         self.edit_conn_btn.setEnabled(has_connections)
         self.del_conn_btn.setEnabled(has_connections)
 
+        # 同步更新大事务分析页面的连接列表
+        if hasattr(self, 'bigtxn_widget') and self.bigtxn_widget:
+            last_conn = self.config_manager.get_last_connection()
+            self.bigtxn_widget.populate_connections(list(connections.keys()), last_conn)
+
     def on_connection_changed(self, connection_name):
         """连接改变事件"""
         if connection_name:
@@ -625,6 +687,10 @@ class MainWindow(QMainWindow):
             self.start_file_combo.clear()
             self.end_file_combo.clear()
             logger.info(f"连接已改变为: {connection_name}，已清空binlog文件列表")
+
+            # 同步更新大事务分析页面的连接选择
+            if hasattr(self, 'bigtxn_widget') and self.bigtxn_widget:
+                self.bigtxn_widget.connection_combo.setCurrentText(connection_name)
 
     def on_time_filter_toggled(self, checked):
         """时间过滤开关切换事件"""
@@ -787,6 +853,10 @@ class MainWindow(QMainWindow):
             # 设置默认值：开始文件选择第一个，结束文件选择最后一个
             self.start_file_combo.setCurrentIndex(0)
             self.end_file_combo.setCurrentIndex(len(binlog_files) - 1)
+
+            # 同步更新大事务分析页面的 binlog 文件列表
+            if hasattr(self, 'bigtxn_widget') and self.bigtxn_widget:
+                self.bigtxn_widget.populate_binlog_files(binlog_files, binlog_files[0])
 
             logger.info(f"已填充binlog文件列表，共{len(binlog_files)}个文件")
 
