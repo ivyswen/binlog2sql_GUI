@@ -57,7 +57,7 @@ class NumericTableWidgetItem(QTableWidgetItem):
 class BigTxnWorker(QThread):
     """大事务分析后台工作线程"""
 
-    progress_updated = Signal(int, int, int, int, str)  # (pct, cur_pos, total_size, txn_count, msg)
+    progress_updated = Signal(int, object, object, int, str)  # (pct, cur_pos, total_size, txn_count, msg)
     analysis_finished = Signal(list)  # (top_txns)
     error_occurred = Signal(str)  # (error_message)
 
@@ -86,7 +86,7 @@ class BigTxnWidget(QWidget):
     """大事务分析选项卡组件"""
 
     # 信号：通知主窗口跳转到 SQL 解析页面并填入参数 (file, start_pos, end_pos)
-    view_in_sql_parser = Signal(str, int, int)
+    view_in_sql_parser = Signal(str, object, object)
 
     def __init__(self, config_manager, parent=None):
         super().__init__(parent)
@@ -506,25 +506,29 @@ class BigTxnWidget(QWidget):
 
     def on_view_selected_in_sql(self):
         """响应在 SQL 解析中查看此事务按钮或双击"""
-        selected_rows = self.master_table.selectionModel().selectedRows()
-        if not selected_rows:
-            return
+        try:
+            selected_rows = self.master_table.selectionModel().selectedRows()
+            if not selected_rows:
+                return
 
-        selected_row = selected_rows[0].row()
-        rank_item = self.master_table.item(selected_row, 0)
-        if not rank_item or not hasattr(rank_item, "raw_value"):
-            return
+            selected_row = selected_rows[0].row()
+            rank_item = self.master_table.item(selected_row, 0)
+            if not rank_item or not hasattr(rank_item, "raw_value"):
+                return
 
-        rank_val = int(rank_item.raw_value)
-        if 1 <= rank_val <= len(self.current_results):
-            rec = self.current_results[rank_val - 1]
-            binlog_file = self.binlog_combo.currentText().strip()
-            start_pos = rec["start"]
-            end_pos = rec["end"]
-            logger.info(
-                f"请求跳转到 SQL 解析: file={binlog_file}, start={start_pos}, end={end_pos}"
-            )
-            self.view_in_sql_parser.emit(binlog_file, start_pos, end_pos)
+            rank_val = int(rank_item.raw_value)
+            if 1 <= rank_val <= len(self.current_results):
+                rec = self.current_results[rank_val - 1]
+                binlog_file = self.binlog_combo.currentText().strip()
+                start_pos = rec["start"]
+                end_pos = rec["end"]
+                logger.info(
+                    f"请求跳转到 SQL 解析: file={binlog_file}, start={start_pos}, end={end_pos}"
+                )
+                self.view_in_sql_parser.emit(binlog_file, start_pos, end_pos)
+        except Exception as e:
+            logger.error(f"跳转到 SQL 解析失败: {str(e)}", exc_info=True)
+            QMessageBox.critical(self, "跳转失败", f"无法跳转到 SQL 解析页面:\n{str(e)}")
 
     def show_context_menu(self, pos):
         """右键菜单"""

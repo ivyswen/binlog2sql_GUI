@@ -163,6 +163,19 @@ class ParseWorker(QThread):
         self.buffer = []
 
 
+class BigIntSpinBox(QDoubleSpinBox):
+    """支持 64 位大整数的位置输入框（兼容超 2GB 的 Binlog Position）"""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setDecimals(0)
+        self.setRange(0, 10**14)
+        self.setSingleStep(1)
+
+    def value(self) -> int:
+        return int(super().value())
+
+
 class MainWindow(QMainWindow):
     """主窗口类"""
 
@@ -295,27 +308,31 @@ class MainWindow(QMainWindow):
 
     def on_switch_to_sql_parser_with_txn(self, binlog_file, start_pos, end_pos):
         """接收来自大事务分析页面的跳转请求，填入参数并切换到 SQL 解析 Tab"""
-        logger.info(f"带入大事务参数到 SQL 解析: file={binlog_file}, start_pos={start_pos}, end_pos={end_pos}")
+        try:
+            logger.info(f"带入大事务参数到 SQL 解析: file={binlog_file}, start_pos={start_pos}, end_pos={end_pos}")
 
-        # 设置起始文件与结束文件
-        if binlog_file:
-            if self.start_file_combo.findText(binlog_file) == -1:
-                self.start_file_combo.addItem(binlog_file)
-            if self.end_file_combo.findText(binlog_file) == -1:
-                self.end_file_combo.addItem(binlog_file)
+            # 设置起始文件与结束文件
+            if binlog_file:
+                if self.start_file_combo.findText(binlog_file) == -1:
+                    self.start_file_combo.addItem(binlog_file)
+                if self.end_file_combo.findText(binlog_file) == -1:
+                    self.end_file_combo.addItem(binlog_file)
 
-            self.start_file_combo.setCurrentText(binlog_file)
-            self.end_file_combo.setCurrentText(binlog_file)
+                self.start_file_combo.setCurrentText(binlog_file)
+                self.end_file_combo.setCurrentText(binlog_file)
 
-        # 设置起止位置
-        self.start_pos_spin.setValue(int(start_pos))
-        self.end_pos_spin.setValue(int(end_pos))
+            # 设置起止位置（自适应 64 位大整数）
+            self.start_pos_spin.setValue(int(start_pos))
+            self.end_pos_spin.setValue(int(end_pos))
 
-        # 切换到 Tab 0 (SQL 解析与回滚)
-        self.tab_widget.setCurrentIndex(0)
+            # 切换到 Tab 0 (SQL 解析与回滚)
+            self.tab_widget.setCurrentIndex(0)
 
-        msg = f"已载入大事务参数 (文件: {binlog_file}, Pos: {start_pos} ~ {end_pos})，请确认参数后点击「开始解析」"
-        self.statusBar().showMessage(msg, 10000)
+            msg = f"已载入大事务参数 (文件: {binlog_file}, Pos: {start_pos} ~ {end_pos})，请确认参数后点击「开始解析」"
+            self.statusBar().showMessage(msg, 10000)
+        except Exception as e:
+            logger.error(f"带入大事务参数到 SQL 解析失败: {str(e)}", exc_info=True)
+            QMessageBox.critical(self, "错误", f"切换至 SQL 解析失败: {str(e)}")
 
     def create_menu_bar(self):
         """创建菜单栏"""
@@ -420,9 +437,9 @@ class MainWindow(QMainWindow):
         self.start_file_combo.setPlaceholderText("例如: mysql-bin.000001")
         binlog_layout.addRow("起始文件:", self.start_file_combo)
 
-        # 起始位置
-        self.start_pos_spin = QSpinBox()
-        self.start_pos_spin.setRange(4, 999999999)
+        # 起始位置（支持 64 位大整数）
+        self.start_pos_spin = BigIntSpinBox()
+        self.start_pos_spin.setRange(4, 10**14)
         self.start_pos_spin.setValue(4)
         binlog_layout.addRow("起始位置:", self.start_pos_spin)
 
@@ -432,9 +449,9 @@ class MainWindow(QMainWindow):
         self.end_file_combo.setPlaceholderText("留空表示与起始文件相同")
         binlog_layout.addRow("结束文件:", self.end_file_combo)
 
-        # 结束位置
-        self.end_pos_spin = QSpinBox()
-        self.end_pos_spin.setRange(0, 999999999)
+        # 结束位置（支持 64 位大整数）
+        self.end_pos_spin = BigIntSpinBox()
+        self.end_pos_spin.setRange(0, 10**14)
         self.end_pos_spin.setValue(0)
         self.end_pos_spin.setSpecialValueText("最新位置")
         binlog_layout.addRow("结束位置:", self.end_pos_spin)
