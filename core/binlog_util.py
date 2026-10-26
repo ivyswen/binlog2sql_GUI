@@ -162,6 +162,40 @@ def concat_sql_from_binlog_event(cursor, binlog_event, row=None, e_start_pos=Non
     return sql
 
 
+def fix_unknown_col_keys(row_dict, binlog_event):
+    """
+    如果行数据中的列名包含 UNKNOWN_COL，尝试根据 binlog_event 的 table_map 中的列名进行补齐替换
+    """
+    if not row_dict:
+        return row_dict
+    if not any(str(k).startswith("UNKNOWN_COL") for k in row_dict.keys()):
+        return row_dict
+
+    table_map = getattr(binlog_event, "table_map", None)
+    table_id = getattr(binlog_event, "table_id", None)
+    if not table_map or table_id is None:
+        return row_dict
+
+    table_obj = table_map.get(table_id)
+    if not table_obj or not getattr(table_obj, "columns", None):
+        return row_dict
+
+    new_dict = {}
+    for k, v in row_dict.items():
+        if str(k).startswith("UNKNOWN_COL"):
+            try:
+                col_idx = int(str(k)[len("UNKNOWN_COL"):])
+                if col_idx < len(table_obj.columns):
+                    real_name = getattr(table_obj.columns[col_idx], "name", None)
+                    if real_name and not str(real_name).startswith("UNKNOWN_COL"):
+                        new_dict[real_name] = v
+                        continue
+            except (ValueError, TypeError):
+                pass
+        new_dict[k] = v
+    return new_dict
+
+
 def generate_sql_pattern(binlog_event, row=None, flashback=False, no_pk=False):
     """生成SQL模板和值"""
     template = ''
@@ -177,14 +211,14 @@ def generate_sql_pattern(binlog_event, row=None, flashback=False, no_pk=False):
 
     if flashback is True:
         if isinstance(binlog_event, WriteRowsEvent):
-            row_values = row.get('values', {})
+            row_values = fix_unknown_col_keys(row.get('values', {}), binlog_event)
             template = 'DELETE FROM `{0}`.`{1}` WHERE {2} LIMIT 1;'.format(
                 schema, table,
                 ' AND '.join(map(compare_items, row_values.items()))
             )
             values = map(fix_object, row_values.values())
         elif isinstance(binlog_event, DeleteRowsEvent):
-            row_values = row.get('values', {})
+            row_values = fix_unknown_col_keys(row.get('values', {}), binlog_event)
             template = 'INSERT INTO `{0}`.`{1}`({2}) VALUES ({3});'.format(
                 schema, table,
                 ', '.join(map(lambda key: '`%s`' % fix_object(key), row_values.keys())),
@@ -192,8 +226,8 @@ def generate_sql_pattern(binlog_event, row=None, flashback=False, no_pk=False):
             )
             values = map(fix_object, row_values.values())
         elif isinstance(binlog_event, UpdateRowsEvent):
-            before_values = row.get('before_values', {})
-            after_values = row.get('after_values', {})
+            before_values = fix_unknown_col_keys(row.get('before_values', {}), binlog_event)
+            after_values = fix_unknown_col_keys(row.get('after_values', {}), binlog_event)
             template = 'UPDATE `{0}`.`{1}` SET {2} WHERE {3} LIMIT 1;'.format(
                 schema, table,
                 ', '.join(['`%s`=%%s' % fix_object(x) for x in before_values.keys()]),
@@ -201,7 +235,7 @@ def generate_sql_pattern(binlog_event, row=None, flashback=False, no_pk=False):
             values = map(fix_object, list(before_values.values())+list(after_values.values()))
     else:
         if isinstance(binlog_event, WriteRowsEvent):
-            row_values = row.get('values', {})
+            row_values = fix_unknown_col_keys(row.get('values', {}), binlog_event)
             if no_pk:
                 if hasattr(binlog_event, 'primary_key') and binlog_event.primary_key:
                     row_values.pop(binlog_event.primary_key, None)
@@ -212,14 +246,14 @@ def generate_sql_pattern(binlog_event, row=None, flashback=False, no_pk=False):
             )
             values = map(fix_object, row_values.values())
         elif isinstance(binlog_event, DeleteRowsEvent):
-            row_values = row.get('values', {})
+            row_values = fix_unknown_col_keys(row.get('values', {}), binlog_event)
             template = 'DELETE FROM `{0}`.`{1}` WHERE {2} LIMIT 1;'.format(
                 schema, table,
                 ' AND '.join(map(compare_items, row_values.items())))
             values = map(fix_object, row_values.values())
         elif isinstance(binlog_event, UpdateRowsEvent):
-            before_values = row.get('before_values', {})
-            after_values = row.get('after_values', {})
+            before_values = fix_unknown_col_keys(row.get('before_values', {}), binlog_event)
+            after_values = fix_unknown_col_keys(row.get('after_values', {}), binlog_event)
             template = 'UPDATE `{0}`.`{1}` SET {2} WHERE {3} LIMIT 1;'.format(
                 schema, table,
                 ', '.join(['`%s`=%%s' % fix_object(k) for k in after_values.keys()]),

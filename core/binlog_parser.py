@@ -74,6 +74,7 @@ class BinlogParser(object):
         self.sql_type = [t.upper() for t in sql_type] if sql_type else []
         self.binlogList = []
         self.progress_callback = None  # 进度回调函数
+        self.table_columns_cache = {}  # 缓存表的列名元数据，避免重复查询数据库
 
         # 初始化数据库连接并获取binlog信息
         self._init_connection()
@@ -134,6 +135,87 @@ class BinlogParser(object):
     def binlog_list(self):
         """获取binlog文件列表"""
         return self.binlogList
+
+    def _ensure_table_columns(self, cursor, binlog_event):
+        """
+        确保 binlog 事件对应的表具有正确的列名与主键信息。
+        解决 MySQL 8.0 在 binlog_row_metadata = 'MINIMAL' 时列名被解析为 UNKNOWN_COL0, UNKNOWN_COL1... 的问题。
+        """
+        try:
+            table_map = getattr(binlog_event, "table_map", None)
+            table_id = getattr(binlog_event, "table_id", None)
+            if not table_map or table_id is None:
+                return
+
+            table_obj = table_map.get(table_id)
+            if not table_obj or not hasattr(table_obj, "columns"):
+                return
+
+            # 检查是否缺少列名（列名为 None、空或以 UNKNOWN_COL 开头）
+            needs_cols = False
+            for col in table_obj.columns:
+                col_name = getattr(col, "name", None)
+                if not col_name or str(col_name).startswith("UNKNOWN_COL"):
+                    needs_cols = True
+                    break
+
+            if not needs_cols:
+                return
+
+            schema = getattr(table_obj, "schema", None) or getattr(binlog_event, "schema", None)
+            table = getattr(table_obj, "table", None) or getattr(binlog_event, "table", None)
+            if not schema or not table:
+                return
+
+            cache_key = (str(schema), str(table))
+            if cache_key not in self.table_columns_cache:
+                try:
+                    query = """
+                        SELECT COLUMN_NAME, COLUMN_KEY 
+                        FROM information_schema.COLUMNS 
+                        WHERE TABLE_SCHEMA = %s AND TABLE_NAME = %s 
+                        ORDER BY ORDINAL_POSITION
+                    """
+                    cursor.execute(query, (schema, table))
+                    rows = cursor.fetchall()
+                    self.table_columns_cache[cache_key] = [
+                        (str(r[0]), str(r[1])) for r in rows
+                    ]
+                    if self.table_columns_cache[cache_key]:
+                        logger.info(
+                            f"成功从数据库缓存表 `{schema}`.`{table}` 的列信息: "
+                            f"{len(self.table_columns_cache[cache_key])} 列"
+                        )
+                    else:
+                        logger.warning(
+                            f"从 information_schema 未查找到表 `{schema}`.`{table}` 的列信息（可能表已被删除）"
+                        )
+                except Exception as e:
+                    logger.warning(f"查询表 `{schema}`.`{table}` 列元数据失败: {str(e)}")
+                    self.table_columns_cache[cache_key] = []
+
+            cols_info = self.table_columns_cache.get(cache_key, [])
+            if cols_info:
+                for idx, (col_name, col_key) in enumerate(cols_info):
+                    if idx < len(table_obj.columns):
+                        table_obj.columns[idx].name = col_name
+                        if col_key == "PRI":
+                            table_obj.columns[idx].is_primary = True
+
+                # 重新计算主键
+                pks = [c.name for c in table_obj.columns if getattr(c, "is_primary", False)]
+                if len(pks) == 1:
+                    table_obj.primary_key = pks[0]
+                elif len(pks) > 1:
+                    table_obj.primary_key = tuple(pks)
+                else:
+                    table_obj.primary_key = ""
+
+                table_obj.column_name_flag = True
+                # 同步更新当前事件的主键属性
+                binlog_event.primary_key = table_obj.primary_key
+        except Exception as e:
+            logger.warning(f"自适应补齐表列名时发生异常: {str(e)}")
 
     def process_binlog(self, callback=None):
         """
@@ -319,6 +401,7 @@ class BinlogParser(object):
                                     continue
 
                             elif is_dml_event(binlog_event) and event_type(binlog_event) in self.sql_type:
+                                self._ensure_table_columns(cursor, binlog_event)
                                 for row in binlog_event.rows:
                                     try:
                                         sql = concat_sql_from_binlog_event(
